@@ -1,6 +1,6 @@
 ALL the algorithms are based on PyTorch.
 
-For runing them, please
+For running them, please
 
 ```pip install torch```
 
