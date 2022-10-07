@@ -2,8 +2,14 @@ ALL the algorithms are based on PyTorch.
 
 For running them, please
 
-```pip install torch```
+```bash
+pip install torch
+```
 
-```pip install gym```
+```bash
+pip install gym
+```
 
-```pip install mujoco```
+```bash
+pip install mujoco
+```
