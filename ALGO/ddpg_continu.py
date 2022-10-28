@@ -1,3 +1,5 @@
+import random
+
 import gym
 import numpy as np
 import torch
@@ -8,10 +10,12 @@ import matplotlib.pyplot as plt
 class Conf:
     # eposides = 1000
     # step_max = 100
+    seed = 42
+
     test_times = 10
     state_size = 17
     action_size = 6
-    step = 50000
+    step = 10000
     batch_size = 32
     buffer_size = 64
     discount = 0.8
@@ -55,6 +59,22 @@ class Actor(torch.nn.Module):
         return x
 
 
+class Normalizer(object):
+    def __init__(self, state_size):
+        self.n = np.zeros(state_size)
+        self.mean = np.zeros(state_size)
+        # self.mean_diff = np.zeros(state_size)
+        # self.var = np.zeros(state_size)
+
+    def update(self, x):
+        self.n += 1
+        self.mean += (x - self.mean) / self.n
+
+    def normalize(self, inputs):
+        result = (inputs-self.mean)/(self.mean+1e-5)
+        return result
+
+
 class DDPG(object):
     def __init__(self):
         self.conf = Conf()
@@ -74,7 +94,7 @@ class DDPG(object):
 
         self.learn_step_counter = 0  # 学习步数计数器
         self.memory_counter = 0  # 记忆库中位值的计数器
-        self.memory = np.zeros((self.conf.buffer_size, self.conf.state_size*2+self.conf.action_size+1))
+        self.memory = np.zeros((self.conf.buffer_size, self.conf.state_size*2+self.conf.action_size+1+1))
 
         self.loss_set = []
         self.len_ep = []
@@ -90,8 +110,8 @@ class DDPG(object):
         # print(a)
         return a
 
-    def store_transition(self, s, a, r, s_):
-        transition = np.hstack((s, a, [r], s_))
+    def store_transition(self, s, a, r, s_, d):
+        transition = np.hstack((s, a, [r], s_, [d]))
         # print(transition)
         index = self.memory_counter % self.conf.buffer_size
         self.memory[index, :] = transition
@@ -115,7 +135,8 @@ class DDPG(object):
         s_batch = torch.FloatTensor(memory_batch[:, :self.conf.state_size])
         a_batch = torch.FloatTensor(memory_batch[:, self.conf.state_size:self.conf.state_size+self.conf.action_size])
         r_batch = torch.FloatTensor(memory_batch[:, self.conf.state_size+self.conf.action_size])
-        s_next_batch = torch.FloatTensor(memory_batch[:, -self.conf.state_size:])
+        s_next_batch = torch.FloatTensor(memory_batch[:, -self.conf.state_size-1:-1])
+        d_batch = torch.FloatTensor(memory_batch[:, -1])
 
         a = self.actor_eval(s_batch)
 
@@ -130,7 +151,7 @@ class DDPG(object):
 
         q_value = self.critic_eval(torch.cat((s_batch, a_batch), dim=-1)).squeeze()
         q_value_next = self.critic_target(torch.cat((s_next_batch, a_next_batch), dim=-1)).squeeze().detach()
-        td_error = r_batch + self.conf.discount * q_value_next-q_value
+        td_error = r_batch + self.conf.discount * (1-d_batch) * q_value_next-q_value
 
         critic_loss = torch.mean(torch.square(td_error))
         self.optimizer_critic.zero_grad()
@@ -140,15 +161,23 @@ class DDPG(object):
 
 if __name__ == '__main__':
 
+    conf = Conf()
+
+    random.seed(conf.seed)
+    np.random.seed(conf.seed)
+    torch.manual_seed(conf.seed)
+    torch.cuda.manual_seed(conf.seed)
+
     env = gym.make("HalfCheetah-v4")
-    # env.action_space.seed(42)
+    env.action_space.seed(conf.seed)
 
     ddpg = DDPG()
 
-    conf = Conf()
+    normalizer = Normalizer(state_size=conf.state_size)
 
-    # obs = env.reset(seed=42)
-    obs = env.reset()
+    obs = env.reset(seed=conf.seed)
+    normalizer.update(obs)
+    obs = normalizer.normalize(obs)
 
     steps_test = []
 
@@ -161,6 +190,9 @@ if __name__ == '__main__':
         reward_list = []
         for i in range(conf.test_times):
             test_obs = env.reset()
+            normalizer.update(test_obs)
+            test_obs = normalizer.normalize(test_obs)
+
             test_done = False
             test_step = 0
             reward_sum = 0
@@ -168,6 +200,10 @@ if __name__ == '__main__':
                 test_action = ddpg.choose_action(torch.FloatTensor(test_obs))
                 test_obs_next, test_reward, test_done, test_info = env.step(test_action)
                 test_obs = test_obs_next
+
+                normalizer.update(test_obs)
+                test_obs = normalizer.normalize(test_obs)
+
                 test_step += 1
                 reward_sum += test_reward
             steps_list.append(test_step)
@@ -186,17 +222,24 @@ if __name__ == '__main__':
 
         obs_next, reward, done, info = env.step(action)
 
+        normalizer.update(obs_next)
+
+        obs_next = normalizer.normalize(obs_next)
+
         # if reward < 0:
         #     reward = 0
 
         # print(obs, obs_next, action, reward)
-        ddpg.store_transition(obs, action, reward, obs_next)
+        ddpg.store_transition(obs, action, reward, obs_next, done)
 
         if ddpg.memory_counter > conf.buffer_size:
             ddpg.learn()
 
         if done:
             obs = env.reset()
+            normalizer.update(obs)
+            obs = normalizer.normalize(obs)
+
         else:
             obs = obs_next
 

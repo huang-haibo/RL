@@ -30,6 +30,8 @@ class Conf:
     soft_tau = 0.1
     action_bound = 1
 
+    discrete_k = 10
+
 
 class Critic(torch.nn.Module):
     def __init__(self):
@@ -81,6 +83,7 @@ class Actor(torch.nn.Module):
 class Actor(torch.nn.Module):
     def __init__(self):
         super(Actor, self).__init__()
+        self.conf = Conf()
         self.linear1 = torch.nn.Linear(17, 32)
         self.relu1 = torch.nn.ReLU()
 
@@ -102,9 +105,6 @@ class Actor(torch.nn.Module):
         mu = self.linear_mu(x)
         mu = self.tanh(mu)*self.action_bound
 
-        # print(self.sigma_log.shape)
-        # print(mu.shape)
-
         # sigma_log = torch.clip(self.sigma_log, self.sigma_log_min, self.sigma_log_max)
         # sigma = torch.exp(sigma_log).expand_as(mu)
 
@@ -123,6 +123,11 @@ class PPO(object):
         self.actor_old = Actor()
         self.kl_target = self.conf.kl_target
         self.beta = 0.5
+
+        self.action_discrete = []
+        for i in range(self.conf.discrete_k):
+            action_value = (2*i/(self.conf.discrete_k-1)-1)*self.conf.action_bound
+            self.action_discrete.append(action_value)
 
         self.states = []
         self.actions = []

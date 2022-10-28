@@ -85,7 +85,7 @@ class A2C(object):
 
         self.learn_step_counter = 0  # 学习步数计数器
         self.memory_counter = 0  # 记忆库中位值的计数器
-        self.memory = np.zeros((self.conf.buffer_size, self.conf.state_size*2+self.conf.action_size+1))
+        self.memory = np.zeros((self.conf.buffer_size, self.conf.state_size*2+self.conf.action_size+1+1))
 
         self.loss_set = []
         self.len_ep = []
@@ -102,8 +102,8 @@ class A2C(object):
         # print(a)
         return a
 
-    def store_transition(self, s, a, r, s_):
-        transition = np.hstack((s, a, [r], s_))
+    def store_transition(self, s, a, r, s_, d):
+        transition = np.hstack((s, a, [r], s_, [d]))
         index = self.memory_counter % self.conf.buffer_size
         self.memory[index, :] = transition
         self.memory_counter += 1
@@ -118,12 +118,13 @@ class A2C(object):
         a_batch = torch.LongTensor(memory_batch[:, self.conf.state_size:self.conf.state_size+self.conf.action_size])\
             .squeeze()
         r_batch = torch.FloatTensor(memory_batch[:, self.conf.state_size+self.conf.action_size])
-        s_next_batch = torch.FloatTensor(memory_batch[:, -self.conf.state_size:])
+        s_next_batch = torch.FloatTensor(memory_batch[:, -self.conf.state_size-1:-1])
+        d_batch = torch.FloatTensor(memory_batch[:, -1])
 
         v_value = self.critic(s_batch).squeeze()
         v_value_next = self.critic(s_next_batch).squeeze().detach()
 
-        adv = r_batch + self.conf.discount * v_value_next-v_value
+        adv = r_batch + self.conf.discount * (1-d_batch) * v_value_next-v_value
 
         norm_dist = self.actor(s_batch)
         a_log_prob = torch.sum(norm_dist.log_prob(a_batch), dim=-1)
@@ -182,7 +183,7 @@ if __name__ == '__main__':
         obs_next, reward, done, info = env.step(action)
         # if reward < 0:
         #     reward = 0
-        a2c.store_transition(obs, action, reward, obs_next)
+        a2c.store_transition(obs, action, reward, obs_next, done)
 
         if a2c.memory_counter > conf.buffer_size:
             a2c.learn()

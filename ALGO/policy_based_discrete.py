@@ -6,8 +6,8 @@ from random import sample
 
 
 class Conf:
-    eposides = 5000
-    step_max = 100
+    eposides = 50000
+    step_max = 500
     test_times = 10
     state_size = 4
     action_size = 1
@@ -15,7 +15,9 @@ class Conf:
     # batch_size = 4
     # buffer_size = 32
     discount = 0.8
-    epsilon = 0.9
+    greedy_epsilon = 0.15
+    greedy_discount = 0.999
+
     target_replace = 30
 
 
@@ -51,13 +53,29 @@ class Policy_Discrete(object):
         self.loss_set = []
         self.len_ep = []
 
-    def choose_action(self, x):
-        a = torch.argmax(self.policy_net(x)).data.item()
+    # def choose_action(self, x):
+    #     a = torch.argmax(self.policy_net(x)).data.item()
+    #
+    #     # if np.random.uniform() < self.conf.epsilon:
+    #     #     a = torch.argmax(self.eval_net(x)).data.numpy()
+    #     # else:
+    #     #     a = np.random.randint(0, 2)
+    #
+    #     return a
 
-        # if np.random.uniform() < self.conf.epsilon:
-        #     a = torch.argmax(self.eval_net(x)).data.numpy()
-        # else:
-        #     a = np.random.randint(0, 2)
+    def choose_action(self, x, train=True):
+
+        if train:
+
+            if np.random.uniform() > self.conf.greedy_epsilon:
+                a = torch.argmax(self.policy_net(x)).data.numpy()
+            else:
+                a = np.random.randint(0, 2)
+
+            self.conf.greedy_epsilon *= self.conf.greedy_discount
+
+        else:
+            a = torch.argmax(self.policy_net(x)).data.numpy()
 
         return a
 
@@ -81,7 +99,7 @@ class Policy_Discrete(object):
         ep_s = torch.FloatTensor(np.array(self.ep_s))
         # print(ep_s)
         # print(self.ep_a)
-        ep_a = torch.LongTensor(self.ep_a)
+        ep_a = torch.LongTensor(np.array(self.ep_a))
 
         ep_a_prob = self.policy_net(ep_s)
         # print(ep_a_prob)
@@ -90,7 +108,7 @@ class Policy_Discrete(object):
         # print(ep_return)
         cross_loss = self.loss_func(torch.log(ep_a_prob), ep_a)
         # print(cross_loss)
-        loss = -torch.mean(cross_loss*ep_return)
+        loss = torch.mean(cross_loss*ep_return)
         # print(loss)
         # a= c
 
@@ -124,7 +142,7 @@ if __name__ == '__main__':
             test_done = False
             test_step = 0
             while not test_done:
-                test_action = policy_dis.choose_action(torch.tensor(test_obs))
+                test_action = policy_dis.choose_action(torch.tensor(test_obs), train=False)
                 test_obs_next, test_reward, test_done, test_info = env.step(test_action)
                 test_obs = test_obs_next
                 test_step += 1

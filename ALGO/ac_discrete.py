@@ -1,3 +1,5 @@
+import random
+
 import gym
 import numpy as np
 import torch
@@ -6,16 +8,20 @@ import matplotlib.pyplot as plt
 
 
 class Conf:
+    seed = 5
     # eposides = 1000
     # step_max = 100
     test_times = 10
     state_size = 4
     action_size = 1
-    step = 20000
-    batch_size = 8
-    buffer_size = 32
-    discount = 0.8
-    epsilon = 0.9
+    step = 50000
+    batch_size = 32
+    buffer_size = 64
+    discount = 0.9
+
+    greedy_epsilon = 0.3
+    greedy_discount = 0.999
+
     target_replace = 30
 
 
@@ -63,23 +69,29 @@ class AC(object):
 
         self.learn_step_counter = 0  # 学习步数计数器
         self.memory_counter = 0  # 记忆库中位值的计数器
-        self.memory = np.zeros((self.conf.buffer_size, self.conf.state_size*2+self.conf.action_size+1))
+        self.memory = np.zeros((self.conf.buffer_size, self.conf.state_size*2+self.conf.action_size+1+1))
 
         self.loss_set = []
         self.len_ep = []
 
-    def choose_action(self, x):
-        a = torch.argmax(self.actor(x)).data.item()
+    def choose_action(self, x, train=True):
 
-        # if np.random.uniform() < self.conf.epsilon:
-        #     a = torch.argmax(self.eval_net(x)).data.numpy()
-        # else:
-        #     a = np.random.randint(0, 2)
+        if train:
+
+            if np.random.uniform() > self.conf.greedy_epsilon:
+                a = torch.argmax(self.actor(x)).data.numpy()
+            else:
+                a = np.random.randint(0, 2)
+
+            self.conf.greedy_epsilon *= self.conf.greedy_discount
+
+        else:
+            a = torch.argmax(self.actor(x)).data.numpy()
 
         return a
 
-    def store_transition(self, s, a, r, s_):
-        transition = np.hstack((s, [a, r], s_))
+    def store_transition(self, s, a, r, s_, d):
+        transition = np.hstack((s, [a, r], s_, [d]))
         index = self.memory_counter % self.conf.buffer_size
         self.memory[index, :] = transition
         self.memory_counter += 1
@@ -94,18 +106,19 @@ class AC(object):
         a_batch = torch.LongTensor(memory_batch[:, self.conf.state_size:self.conf.state_size+self.conf.action_size])\
             .squeeze()
         r_batch = torch.FloatTensor(memory_batch[:, self.conf.state_size+self.conf.action_size])
-        s_next_batch = torch.FloatTensor(memory_batch[:, -self.conf.state_size:])
+        s_next_batch = torch.FloatTensor(memory_batch[:, -self.conf.state_size-1:-1])
+        d_batch = torch.FloatTensor(memory_batch[:, -1])
 
         a_next_batch = torch.argmax(self.actor(s_next_batch), dim=-1)
 
         q_value = self.critic(s_batch).gather(1, torch.unsqueeze(a_batch, dim=1)).squeeze()
         q_value_next = self.critic(s_next_batch).gather(1, torch.unsqueeze(a_next_batch, dim=1)).squeeze().detach()
 
-        td_error = r_batch + self.conf.discount * q_value_next-q_value
+        td_error = r_batch + self.conf.discount * (1-d_batch) * q_value_next-q_value
 
         a_prob = self.actor(s_batch)
         actor_cross = self.loss_func_actor(torch.log(a_prob), a_batch)
-        actor_loss = -torch.mean(actor_cross*q_value)
+        actor_loss = torch.mean(actor_cross*q_value)
         self.optimizer_actor.zero_grad()
         actor_loss.backward(retain_graph=True)
         self.optimizer_actor.step()
@@ -118,14 +131,19 @@ class AC(object):
 
 if __name__ == '__main__':
 
+    conf = Conf()
+
+    random.seed(conf.seed)
+    np.random.seed(conf.seed)
+    torch.manual_seed(conf.seed)
+    torch.cuda.manual_seed(conf.seed)
+
     env = gym.make("CartPole-v1")
-    env.action_space.seed(42)
+    env.action_space.seed(conf.seed)
 
     ac_dis = AC()
 
-    conf = Conf()
-
-    obs = env.reset(seed=42)
+    obs = env.reset(seed=conf.seed)
 
     steps_test = []
 
@@ -136,7 +154,7 @@ if __name__ == '__main__':
             test_done = False
             test_step = 0
             while not test_done:
-                test_action = ac_dis.choose_action(torch.tensor(test_obs))
+                test_action = ac_dis.choose_action(torch.tensor(test_obs), train=False)
                 test_obs_next, test_reward, test_done, test_info = env.step(test_action)
                 test_obs = test_obs_next
                 test_step += 1
@@ -150,7 +168,7 @@ if __name__ == '__main__':
 
         obs_next, reward, done, info = env.step(action)
 
-        ac_dis.store_transition(obs, action, reward, obs_next)
+        ac_dis.store_transition(obs, action, reward, obs_next, done)
 
         if ac_dis.memory_counter > conf.buffer_size:
             ac_dis.learn()

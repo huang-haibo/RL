@@ -104,7 +104,7 @@ class SAC(object):
 
         self.learn_step_counter = 0  # 学习步数计数器
         self.memory_counter = 0  # 记忆库中位值的计数器
-        self.memory = np.zeros((self.conf.buffer_size, self.conf.state_size*2+self.conf.action_size+1))
+        self.memory = np.zeros((self.conf.buffer_size, self.conf.state_size*2+self.conf.action_size+1+1))
 
         self.loss_set = []
         self.len_ep = []
@@ -121,8 +121,8 @@ class SAC(object):
         # print(a)
         return a
 
-    def store_transition(self, s, a, r, s_):
-        transition = np.hstack((s, a, [r], s_))
+    def store_transition(self, s, a, r, s_, d):
+        transition = np.hstack((s, a, [r], s_, [d]))
         index = self.memory_counter % self.conf.buffer_size
         self.memory[index, :] = transition
         self.memory_counter += 1
@@ -141,7 +141,8 @@ class SAC(object):
         a_batch = torch.FloatTensor(memory_batch[:, self.conf.state_size:self.conf.state_size+self.conf.action_size])\
             .squeeze()
         r_batch = torch.FloatTensor(memory_batch[:, self.conf.state_size+self.conf.action_size])
-        s_next_batch = torch.FloatTensor(memory_batch[:, -self.conf.state_size:])
+        s_next_batch = torch.FloatTensor(memory_batch[:, -self.conf.state_size-1:-1])
+        d_batch = torch.FloatTensor(memory_batch[:, -1])
 
         q_value_1 = self.critic_eval_1(torch.cat((s_batch, a_batch), dim=-1)).squeeze()
         q_value_2 = self.critic_eval_2(torch.cat((s_batch, a_batch), dim=-1)).squeeze()
@@ -155,7 +156,7 @@ class SAC(object):
         q_value_next_1 = self.critic_eval_1(torch.cat((s_next_batch, a_next_batch), dim=-1)).squeeze()
         q_value_next_2 = self.critic_eval_2(torch.cat((s_next_batch, a_next_batch), dim=-1)).squeeze()
         q_value_next_minimum = torch.minimum(q_value_next_1, q_value_next_2)
-        backup = r_batch+self.conf.discount * (q_value_next_minimum - 0.2*a_next_log_prob).detach()
+        backup = r_batch+self.conf.discount * (1-d_batch) * (q_value_next_minimum - 0.2*a_next_log_prob).detach()
 
         critic_loss_1 = torch.mean(torch.square(q_value_1 - backup))
         self.optimizer_critic_1.zero_grad()
@@ -228,7 +229,7 @@ if __name__ == '__main__':
         obs_next, reward, done, info = env.step(action)
         # if reward < 0:
         #     reward = 0
-        sac.store_transition(obs, action, reward, obs_next)
+        sac.store_transition(obs, action, reward, obs_next, done)
 
         if sac.memory_counter > conf.buffer_size:
             sac.learn()
